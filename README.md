@@ -23,12 +23,13 @@ An Osaurus plugin for controlling Apple Music on macOS.
 | `set_volume`     | Set volume level         | `level` (0-100)                  |
 | `play_playlist`  | Play a playlist by name  | `playlist`, `shuffle` (optional) |
 
-### Track Information
+### Library Information
 
-| Tool                | Description                      | Parameters |
-| ------------------- | -------------------------------- | ---------- |
-| `get_current_track` | Get currently playing track info | None       |
-| `get_library_stats` | Get library statistics           | None       |
+| Tool                | Description                        | Parameters         |
+| ------------------- | ---------------------------------- | ------------------ |
+| `get_current_track` | Get currently playing track info   | None               |
+| `get_library_stats` | Get library statistics             | None               |
+| `list_playlists`    | List available playlists           | `limit` (optional) |
 
 ### Search and Play
 

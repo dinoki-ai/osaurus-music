@@ -352,6 +352,46 @@ private struct PlayPlaylistTool: Tool {
     }
 }
 
+private struct ListPlaylistsTool: Tool {
+    let name = "list_playlists"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        struct Args: Decodable {
+            let limit: Int?
+        }
+        
+        let input = (try? JSONDecoder().decode(Args.self, from: args.data(using: .utf8) ?? Data()))
+        let limit = input?.limit ?? 25
+        
+        let script = """
+        tell application "Music"
+            set playlistNames to {}
+            set allPlaylists to user playlists
+            repeat with i from 1 to (count of allPlaylists)
+                if i > \(limit) then exit repeat
+                set end of playlistNames to name of item i of allPlaylists
+            end repeat
+            set AppleScript's text item delimiters to "~~~"
+            return playlistNames as string
+        end tell
+        """
+        
+        switch runner.run(script) {
+        case .success(let output):
+            if output.isEmpty {
+                return #"{"playlists": [], "count": 0}"#
+            }
+            
+            let names = output.components(separatedBy: "~~~")
+            let jsonNames = names.map { #""\#($0.escapedForJSON)""# }
+            return #"{"playlists": [\#(jsonNames.joined(separator: ", "))], "count": \#(names.count)}"#
+            
+        case .failure(let error):
+            return error.jsonError
+        }
+    }
+}
+
 // MARK: - Plugin Context
 
 private class PluginContext {
@@ -370,6 +410,7 @@ private class PluginContext {
             // Information
             GetCurrentTrackTool(),
             GetLibraryStatsTool(),
+            ListPlaylistsTool(),
             
             // Search
             SearchSongsTool(),
@@ -426,6 +467,7 @@ private let manifest = #"""
       {"id": "set_volume", "description": "Set volume level (0-100)", "parameters": {"type": "object", "properties": {"level": {"type": "integer", "description": "Volume level from 0 to 100"}}, "required": ["level"]}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "get_current_track", "description": "Get currently playing track info", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "get_library_stats", "description": "Get library statistics (track and playlist counts)", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "list_playlists", "description": "List available playlists in the user's library", "parameters": {"type": "object", "properties": {"limit": {"type": "integer", "description": "Max playlists to return (default: 25)"}}}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "search_songs", "description": "Search for songs in your library", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "Max results (default: 10)"}}, "required": ["query"]}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "play_song", "description": "Search and play a specific song", "parameters": {"type": "object", "properties": {"song": {"type": "string", "description": "Song name to search and play"}}, "required": ["song"]}, "requirements": ["automation"], "permission_policy": "ask"},
       {"id": "play_playlist", "description": "Play a playlist by name (more reliable than playing individual songs)", "parameters": {"type": "object", "properties": {"playlist": {"type": "string", "description": "Name of the playlist to play"}, "shuffle": {"type": "boolean", "description": "Whether to shuffle the playlist (default: false)"}}, "required": ["playlist"]}, "requirements": ["automation"], "permission_policy": "ask"}
