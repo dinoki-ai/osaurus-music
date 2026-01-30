@@ -265,10 +265,13 @@ private struct PlaySongTool: Tool {
         
         let script = """
         tell application "Music"
+            activate
             set searchResults to search library playlist 1 for "\(escapedSong)" only songs
             if (count of searchResults) > 0 then
-                play item 1 of searchResults
-                return name of item 1 of searchResults & "|||" & artist of item 1 of searchResults
+                set theTrack to item 1 of searchResults
+                play theTrack
+                delay 0.5
+                return name of theTrack & "|||" & artist of theTrack & "|||" & (player state as string)
             else
                 return "NOT_FOUND"
             end if
@@ -282,10 +285,66 @@ private struct PlaySongTool: Tool {
             }
             
             let parts = output.components(separatedBy: "|||")
-            if parts.count >= 2 {
-                return #"{"success": true, "playing": {"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)"}}"#
+            if parts.count >= 3 {
+                let isPlaying = parts[2].lowercased() == "playing"
+                if isPlaying {
+                    return #"{"success": true, "playing": true, "track": {"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)"}}"#
+                } else {
+                    return #"{"success": true, "playing": false, "track": {"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)"}, "message": "Track found but streaming playback requires manual start. Press play in Music app or try play_playlist instead."}"#
+                }
             }
-            return #"{"success": true, "message": "Now playing"}"#
+            return #"{"success": true, "playing": false, "message": "Track found"}"#
+            
+        case .failure(let error):
+            return error.jsonError
+        }
+    }
+}
+
+private struct PlayPlaylistTool: Tool {
+    let name = "play_playlist"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        struct Args: Decodable {
+            let playlist: String
+            let shuffle: Bool?
+        }
+        
+        guard let data = args.data(using: .utf8),
+              let input = try? JSONDecoder().decode(Args.self, from: data) else {
+            return #"{"error": "Invalid arguments. Expected: {\"playlist\": \"playlist name\"}"}"#
+        }
+        
+        let escapedPlaylist = input.playlist.replacingOccurrences(of: "\"", with: "\\\"")
+        let shuffleEnabled = input.shuffle ?? false
+        
+        let script = """
+        tell application "Music"
+            activate
+            try
+                set thePlaylist to playlist "\(escapedPlaylist)"
+                set shuffle enabled to \(shuffleEnabled)
+                play thePlaylist
+                delay 0.5
+                return (name of thePlaylist) & "|||" & (count of tracks of thePlaylist) & "|||" & (player state as string)
+            on error
+                return "NOT_FOUND"
+            end try
+        end tell
+        """
+        
+        switch runner.run(script) {
+        case .success(let output):
+            if output == "NOT_FOUND" {
+                return #"{"success": false, "error": "Playlist '\#(input.playlist.escapedForJSON)' not found"}"#
+            }
+            
+            let parts = output.components(separatedBy: "|||")
+            if parts.count >= 3 {
+                let isPlaying = parts[2].lowercased() == "playing"
+                return #"{"success": true, "playing": \#(isPlaying), "playlist": {"name": "\#(parts[0].escapedForJSON)", "tracks": \#(parts[1])}, "shuffle": \#(shuffleEnabled)}"#
+            }
+            return #"{"success": true}"#
             
         case .failure(let error):
             return error.jsonError
@@ -315,6 +374,7 @@ private class PluginContext {
             // Search
             SearchSongsTool(),
             PlaySongTool(),
+            PlayPlaylistTool(),
         ]
         return Dictionary(uniqueKeysWithValues: toolList.map { ($0.name, $0) })
     }()
@@ -367,7 +427,8 @@ private let manifest = #"""
       {"id": "get_current_track", "description": "Get currently playing track info", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "get_library_stats", "description": "Get library statistics (track and playlist counts)", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
       {"id": "search_songs", "description": "Search for songs in your library", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "Max results (default: 10)"}}, "required": ["query"]}, "requirements": ["automation"], "permission_policy": "auto"},
-      {"id": "play_song", "description": "Search and play a specific song", "parameters": {"type": "object", "properties": {"song": {"type": "string", "description": "Song name to search and play"}}, "required": ["song"]}, "requirements": ["automation"], "permission_policy": "ask"}
+      {"id": "play_song", "description": "Search and play a specific song", "parameters": {"type": "object", "properties": {"song": {"type": "string", "description": "Song name to search and play"}}, "required": ["song"]}, "requirements": ["automation"], "permission_policy": "ask"},
+      {"id": "play_playlist", "description": "Play a playlist by name (more reliable than playing individual songs)", "parameters": {"type": "object", "properties": {"playlist": {"type": "string", "description": "Name of the playlist to play"}, "shuffle": {"type": "boolean", "description": "Whether to shuffle the playlist (default: false)"}}, "required": ["playlist"]}, "requirements": ["automation"], "permission_policy": "ask"}
     ]
   }
 }
