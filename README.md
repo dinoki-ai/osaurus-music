@@ -5,6 +5,7 @@ An Osaurus plugin for controlling Apple Music on macOS.
 ## Features
 
 - **Playback Control**: Play, pause, skip tracks, and adjust volume
+- **Playlist Playback**: Play any playlist from your library (recommended for streaming content)
 - **Track Information**: Get details about the currently playing track
 - **Library Search**: Search your music library and play specific songs
 - **Library Stats**: View your library statistics
@@ -13,13 +14,14 @@ An Osaurus plugin for controlling Apple Music on macOS.
 
 ### Playback Controls
 
-| Tool             | Description              | Parameters      |
-| ---------------- | ------------------------ | --------------- |
-| `play`           | Resume or start playback | None            |
-| `pause`          | Pause playback           | None            |
-| `next_track`     | Skip to next track       | None            |
-| `previous_track` | Go to previous track     | None            |
-| `set_volume`     | Set volume level         | `level` (0-100) |
+| Tool             | Description              | Parameters                       |
+| ---------------- | ------------------------ | -------------------------------- |
+| `play`           | Resume or start playback | None                             |
+| `pause`          | Pause playback           | None                             |
+| `next_track`     | Skip to next track       | None                             |
+| `previous_track` | Go to previous track     | None                             |
+| `set_volume`     | Set volume level         | `level` (0-100)                  |
+| `play_playlist`  | Play a playlist by name  | `playlist`, `shuffle` (optional) |
 
 ### Track Information
 
@@ -41,10 +43,17 @@ An Osaurus plugin for controlling Apple Music on macOS.
 | ------------ | ---------------------------------------------- | ---------- |
 | `open_music` | Open Apple Music (launches or brings to front) | None       |
 
+## Note on Streaming Tracks
+
+Due to macOS/AppleScript limitations, **individual streaming tracks** (from Apple Music catalog) may not auto-play when using `play_song`. The tool will report `"playing": false` in this case.
+
+**Recommendation**: Use `play_playlist` for the most reliable playback experience with Apple Music streaming content. Playlists work reliably with both local and streaming tracks.
+
 ## Requirements
 
 - macOS 15.0 or later
 - Apple Music app installed
+- Apple Music subscription (for streaming content)
 - Automation permission (granted when first used)
 
 ## Development
