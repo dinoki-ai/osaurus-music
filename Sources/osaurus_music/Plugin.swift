@@ -3,345 +3,328 @@ import Foundation
 // MARK: - AppleScript Runner
 
 private struct AppleScriptRunner {
-  enum RunnerError: Error {
-    case musicNotRunning
-    case permissionDenied
-    case executionFailed(String)
-
-    var jsonError: String {
-      switch self {
-      case .musicNotRunning:
-        return #"{"error": "Music app is not running. Please open Apple Music first."}"#
-      case .permissionDenied:
-        return
-          #"{"error": "Automation permission denied. Grant Osaurus access in System Settings > Privacy & Security > Automation."}"#
-      case .executionFailed(let message):
-        return #"{"error": "Command failed: \#(message.escapedForJSON)"}"#
-      }
+    enum RunnerError: Error {
+        case musicNotRunning
+        case permissionDenied
+        case executionFailed(String)
+        
+        var jsonError: String {
+            switch self {
+            case .musicNotRunning:
+                return #"{"error": "Music app is not running. Please open Apple Music first."}"#
+            case .permissionDenied:
+                return #"{"error": "Automation permission denied. Grant Osaurus access in System Settings > Privacy & Security > Automation."}"#
+            case .executionFailed(let message):
+                return #"{"error": "Command failed: \#(message.escapedForJSON)"}"#
+            }
+        }
     }
-  }
-
-  func isMusicRunning() -> Bool {
-    let script = #"tell application "System Events" to (name of processes) contains "Music""#
-    return runOsascript(script).output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
-  }
-
-  func run(_ script: String, requiresMusicRunning: Bool = true) -> Result<String, RunnerError> {
-    if requiresMusicRunning && !isMusicRunning() {
-      return .failure(.musicNotRunning)
+    
+    func isMusicRunning() -> Bool {
+        let script = #"tell application "System Events" to (name of processes) contains "Music""#
+        return runOsascript(script).output.trimmingCharacters(in: .whitespacesAndNewlines) == "true"
     }
-
-    let result = runOsascript(script)
-
-    if result.exitCode != 0 {
-      let stderr = result.error.lowercased()
-      if stderr.contains("not authorized") || stderr.contains("not allowed") {
-        return .failure(.permissionDenied)
-      }
-      if stderr.contains("isn't running") {
-        return .failure(.musicNotRunning)
-      }
-      return .failure(.executionFailed(result.error))
+    
+    func run(_ script: String, requiresMusicRunning: Bool = true) -> Result<String, RunnerError> {
+        if requiresMusicRunning && !isMusicRunning() {
+            return .failure(.musicNotRunning)
+        }
+        
+        let result = runOsascript(script)
+        
+        if result.exitCode != 0 {
+            let stderr = result.error.lowercased()
+            if stderr.contains("not authorized") || stderr.contains("not allowed") {
+                return .failure(.permissionDenied)
+            }
+            if stderr.contains("isn't running") {
+                return .failure(.musicNotRunning)
+            }
+            return .failure(.executionFailed(result.error))
+        }
+        
+        return .success(result.output.trimmingCharacters(in: .whitespacesAndNewlines))
     }
-
-    return .success(result.output.trimmingCharacters(in: .whitespacesAndNewlines))
-  }
-
-  private func runOsascript(_ script: String) -> (output: String, error: String, exitCode: Int32) {
-    let process = Process()
-    process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
-    process.arguments = ["-e", script]
-
-    let outputPipe = Pipe()
-    let errorPipe = Pipe()
-    process.standardOutput = outputPipe
-    process.standardError = errorPipe
-
-    do {
-      try process.run()
-      process.waitUntilExit()
-
-      let output =
-        String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      let error =
-        String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-      return (output, error, process.terminationStatus)
-    } catch {
-      return ("", error.localizedDescription, 1)
+    
+    private func runOsascript(_ script: String) -> (output: String, error: String, exitCode: Int32) {
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+        process.arguments = ["-e", script]
+        
+        let outputPipe = Pipe()
+        let errorPipe = Pipe()
+        process.standardOutput = outputPipe
+        process.standardError = errorPipe
+        
+        do {
+            try process.run()
+            process.waitUntilExit()
+            
+            let output = String(data: outputPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let error = String(data: errorPipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            return (output, error, process.terminationStatus)
+        } catch {
+            return ("", error.localizedDescription, 1)
+        }
     }
-  }
 }
 
 // MARK: - JSON Helpers
 
-extension String {
-  fileprivate var escapedForJSON: String {
-    self.replacingOccurrences(of: "\\", with: "\\\\")
-      .replacingOccurrences(of: "\"", with: "\\\"")
-      .replacingOccurrences(of: "\n", with: "\\n")
-      .replacingOccurrences(of: "\r", with: "\\r")
-      .replacingOccurrences(of: "\t", with: "\\t")
-  }
+private extension String {
+    var escapedForJSON: String {
+        self.replacingOccurrences(of: "\\", with: "\\\\")
+            .replacingOccurrences(of: "\"", with: "\\\"")
+            .replacingOccurrences(of: "\n", with: "\\n")
+            .replacingOccurrences(of: "\r", with: "\\r")
+            .replacingOccurrences(of: "\t", with: "\\t")
+    }
 }
 
 // MARK: - Tool Protocol
 
 private protocol Tool {
-  var name: String { get }
-  func run(args: String, runner: AppleScriptRunner) -> String
+    var name: String { get }
+    func run(args: String, runner: AppleScriptRunner) -> String
 }
 
 // MARK: - Simple Command Tool
 
 /// A tool that runs a simple AppleScript command and returns a success message
 private struct SimpleCommandTool: Tool {
-  let name: String
-  let script: String
-  let successMessage: String
-  let requiresMusicRunning: Bool
-
-  init(_ name: String, script: String, message: String, requiresMusicRunning: Bool = true) {
-    self.name = name
-    self.script = script
-    self.successMessage = message
-    self.requiresMusicRunning = requiresMusicRunning
-  }
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    switch runner.run(script, requiresMusicRunning: requiresMusicRunning) {
-    case .success:
-      return #"{"success": true, "message": "\#(successMessage)"}"#
-    case .failure(let error):
-      return error.jsonError
+    let name: String
+    let script: String
+    let successMessage: String
+    let requiresMusicRunning: Bool
+    
+    init(_ name: String, script: String, message: String, requiresMusicRunning: Bool = true) {
+        self.name = name
+        self.script = script
+        self.successMessage = message
+        self.requiresMusicRunning = requiresMusicRunning
     }
-  }
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        switch runner.run(script, requiresMusicRunning: requiresMusicRunning) {
+        case .success:
+            return #"{"success": true, "message": "\#(successMessage)"}"#
+        case .failure(let error):
+            return error.jsonError
+        }
+    }
 }
 
 // MARK: - Playback Tools
 
 private struct SetVolumeTool: Tool {
-  let name = "set_volume"
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    struct Args: Decodable { let level: Int }
-
-    guard let data = args.data(using: .utf8),
-      let input = try? JSONDecoder().decode(Args.self, from: data)
-    else {
-      return #"{"error": "Invalid arguments. Expected: {\"level\": 0-100}"}"#
+    let name = "set_volume"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        struct Args: Decodable { let level: Int }
+        
+        guard let data = args.data(using: .utf8),
+              let input = try? JSONDecoder().decode(Args.self, from: data) else {
+            return #"{"error": "Invalid arguments. Expected: {\"level\": 0-100}"}"#
+        }
+        
+        let level = max(0, min(100, input.level))
+        let script = #"tell application "Music" to set sound volume to \#(level)"#
+        
+        switch runner.run(script) {
+        case .success:
+            return #"{"success": true, "volume": \#(level)}"#
+        case .failure(let error):
+            return error.jsonError
+        }
     }
-
-    let level = max(0, min(100, input.level))
-    let script = #"tell application "Music" to set sound volume to \#(level)"#
-
-    switch runner.run(script) {
-    case .success:
-      return #"{"success": true, "volume": \#(level)}"#
-    case .failure(let error):
-      return error.jsonError
-    }
-  }
 }
 
 // MARK: - Information Tools
 
 private struct GetCurrentTrackTool: Tool {
-  let name = "get_current_track"
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    let script = """
-      tell application "Music"
-          if player state is stopped then return "STOPPED"
-          return name of current track & "|||" & artist of current track & "|||" & album of current track & "|||" & duration of current track & "|||" & player position & "|||" & (player state as string)
-      end tell
-      """
-
-    switch runner.run(script) {
-    case .success(let output):
-      if output == "STOPPED" {
-        return #"{"playing": false, "message": "No track is currently playing"}"#
-      }
-
-      let parts = output.components(separatedBy: "|||")
-      guard parts.count >= 6 else {
-        return #"{"error": "Failed to parse track information"}"#
-      }
-
-      return """
-        {"playing": true, "track": {"name": "\(parts[0].escapedForJSON)", "artist": "\(parts[1].escapedForJSON)", "album": "\(parts[2].escapedForJSON)", "duration": \(parts[3]), "position": \(parts[4]), "state": "\(parts[5].escapedForJSON)"}}
+    let name = "get_current_track"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        let script = """
+        tell application "Music"
+            if player state is stopped then return "STOPPED"
+            return name of current track & "|||" & artist of current track & "|||" & album of current track & "|||" & duration of current track & "|||" & player position & "|||" & (player state as string)
+        end tell
         """
-
-    case .failure(let error):
-      return error.jsonError
+        
+        switch runner.run(script) {
+        case .success(let output):
+            if output == "STOPPED" {
+                return #"{"playing": false, "message": "No track is currently playing"}"#
+            }
+            
+            let parts = output.components(separatedBy: "|||")
+            guard parts.count >= 6 else {
+                return #"{"error": "Failed to parse track information"}"#
+            }
+            
+            return """
+            {"playing": true, "track": {"name": "\(parts[0].escapedForJSON)", "artist": "\(parts[1].escapedForJSON)", "album": "\(parts[2].escapedForJSON)", "duration": \(parts[3]), "position": \(parts[4]), "state": "\(parts[5].escapedForJSON)"}}
+            """
+            
+        case .failure(let error):
+            return error.jsonError
+        }
     }
-  }
 }
 
 private struct GetLibraryStatsTool: Tool {
-  let name = "get_library_stats"
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    let script = """
-      tell application "Music"
-          return (count of tracks of library playlist 1) & "|||" & (count of playlists)
-      end tell
-      """
-
-    switch runner.run(script) {
-    case .success(let output):
-      let parts = output.components(separatedBy: "|||")
-      guard parts.count >= 2 else {
-        return #"{"error": "Failed to parse library statistics"}"#
-      }
-      return #"{"tracks": \#(parts[0]), "playlists": \#(parts[1])}"#
-
-    case .failure(let error):
-      return error.jsonError
+    let name = "get_library_stats"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        let script = """
+        tell application "Music"
+            return (count of tracks of library playlist 1) & "|||" & (count of playlists)
+        end tell
+        """
+        
+        switch runner.run(script) {
+        case .success(let output):
+            let parts = output.components(separatedBy: "|||")
+            guard parts.count >= 2 else {
+                return #"{"error": "Failed to parse library statistics"}"#
+            }
+            return #"{"tracks": \#(parts[0]), "playlists": \#(parts[1])}"#
+            
+        case .failure(let error):
+            return error.jsonError
+        }
     }
-  }
 }
 
 // MARK: - Search Tools
 
 private struct SearchSongsTool: Tool {
-  let name = "search_songs"
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    struct Args: Decodable {
-      let query: String
-      let limit: Int?
+    let name = "search_songs"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        struct Args: Decodable {
+            let query: String
+            let limit: Int?
+        }
+        
+        guard let data = args.data(using: .utf8),
+              let input = try? JSONDecoder().decode(Args.self, from: data) else {
+            return #"{"error": "Invalid arguments. Expected: {\"query\": \"search term\"}"}"#
+        }
+        
+        let limit = input.limit ?? 10
+        let escapedQuery = input.query.replacingOccurrences(of: "\"", with: "\\\"")
+        
+        let script = """
+        tell application "Music"
+            set searchResults to search library playlist 1 for "\(escapedQuery)" only songs
+            set resultList to {}
+            repeat with i from 1 to (count of searchResults)
+                if i > \(limit) then exit repeat
+                set t to item i of searchResults
+                set end of resultList to (name of t & "|||" & artist of t & "|||" & album of t)
+            end repeat
+            set AppleScript's text item delimiters to "~~~"
+            return resultList as string
+        end tell
+        """
+        
+        switch runner.run(script) {
+        case .success(let output):
+            if output.isEmpty {
+                return #"{"results": [], "count": 0}"#
+            }
+            
+            let results = output.components(separatedBy: "~~~").compactMap { track -> String? in
+                let parts = track.components(separatedBy: "|||")
+                guard parts.count >= 3 else { return nil }
+                return #"{"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)", "album": "\#(parts[2].escapedForJSON)"}"#
+            }
+            
+            return #"{"results": [\#(results.joined(separator: ", "))], "count": \#(results.count)}"#
+            
+        case .failure(let error):
+            return error.jsonError
+        }
     }
-
-    guard let data = args.data(using: .utf8),
-      let input = try? JSONDecoder().decode(Args.self, from: data)
-    else {
-      return #"{"error": "Invalid arguments. Expected: {\"query\": \"search term\"}"}"#
-    }
-
-    let limit = input.limit ?? 10
-    let escapedQuery = input.query.replacingOccurrences(of: "\"", with: "\\\"")
-
-    let script = """
-      tell application "Music"
-          set searchResults to search library playlist 1 for "\(escapedQuery)" only songs
-          set resultList to {}
-          repeat with i from 1 to (count of searchResults)
-              if i > \(limit) then exit repeat
-              set t to item i of searchResults
-              set end of resultList to (name of t & "|||" & artist of t & "|||" & album of t)
-          end repeat
-          set AppleScript's text item delimiters to "~~~"
-          return resultList as string
-      end tell
-      """
-
-    switch runner.run(script) {
-    case .success(let output):
-      if output.isEmpty {
-        return #"{"results": [], "count": 0}"#
-      }
-
-      let results = output.components(separatedBy: "~~~").compactMap { track -> String? in
-        let parts = track.components(separatedBy: "|||")
-        guard parts.count >= 3 else { return nil }
-        return
-          #"{"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)", "album": "\#(parts[2].escapedForJSON)"}"#
-      }
-
-      return #"{"results": [\#(results.joined(separator: ", "))], "count": \#(results.count)}"#
-
-    case .failure(let error):
-      return error.jsonError
-    }
-  }
 }
 
 private struct PlaySongTool: Tool {
-  let name = "play_song"
-
-  func run(args: String, runner: AppleScriptRunner) -> String {
-    struct Args: Decodable { let song: String }
-
-    guard let data = args.data(using: .utf8),
-      let input = try? JSONDecoder().decode(Args.self, from: data)
-    else {
-      return #"{"error": "Invalid arguments. Expected: {\"song\": \"song name\"}"}"#
+    let name = "play_song"
+    
+    func run(args: String, runner: AppleScriptRunner) -> String {
+        struct Args: Decodable { let song: String }
+        
+        guard let data = args.data(using: .utf8),
+              let input = try? JSONDecoder().decode(Args.self, from: data) else {
+            return #"{"error": "Invalid arguments. Expected: {\"song\": \"song name\"}"}"#
+        }
+        
+        let escapedSong = input.song.replacingOccurrences(of: "\"", with: "\\\"")
+        
+        let script = """
+        tell application "Music"
+            set searchResults to search library playlist 1 for "\(escapedSong)" only songs
+            if (count of searchResults) > 0 then
+                play item 1 of searchResults
+                return name of item 1 of searchResults & "|||" & artist of item 1 of searchResults
+            else
+                return "NOT_FOUND"
+            end if
+        end tell
+        """
+        
+        switch runner.run(script) {
+        case .success(let output):
+            if output == "NOT_FOUND" {
+                return #"{"success": false, "error": "No song found matching '\#(input.song.escapedForJSON)'"}"#
+            }
+            
+            let parts = output.components(separatedBy: "|||")
+            if parts.count >= 2 {
+                return #"{"success": true, "playing": {"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)"}}"#
+            }
+            return #"{"success": true, "message": "Now playing"}"#
+            
+        case .failure(let error):
+            return error.jsonError
+        }
     }
-
-    let escapedSong = input.song.replacingOccurrences(of: "\"", with: "\\\"")
-
-    let script = """
-      tell application "Music"
-          set searchResults to search library playlist 1 for "\(escapedSong)" only songs
-          if (count of searchResults) > 0 then
-              play item 1 of searchResults
-              return name of item 1 of searchResults & "|||" & artist of item 1 of searchResults
-          else
-              return "NOT_FOUND"
-          end if
-      end tell
-      """
-
-    switch runner.run(script) {
-    case .success(let output):
-      if output == "NOT_FOUND" {
-        return
-          #"{"success": false, "error": "No song found matching '\#(input.song.escapedForJSON)'"}"#
-      }
-
-      let parts = output.components(separatedBy: "|||")
-      if parts.count >= 2 {
-        return
-          #"{"success": true, "playing": {"name": "\#(parts[0].escapedForJSON)", "artist": "\#(parts[1].escapedForJSON)"}}"#
-      }
-      return #"{"success": true, "message": "Now playing"}"#
-
-    case .failure(let error):
-      return error.jsonError
-    }
-  }
 }
 
 // MARK: - Plugin Context
 
 private class PluginContext {
-  let runner = AppleScriptRunner()
-
-  let tools: [String: Tool] = {
-    let toolList: [Tool] = [
-      // Playback controls
-      SimpleCommandTool(
-        "play", script: #"tell application "Music" to play"#, message: "Playback started"),
-      SimpleCommandTool(
-        "pause", script: #"tell application "Music" to pause"#, message: "Playback paused"),
-      SimpleCommandTool(
-        "next_track", script: #"tell application "Music" to next track"#,
-        message: "Skipped to next track"),
-      SimpleCommandTool(
-        "previous_track", script: #"tell application "Music" to previous track"#,
-        message: "Went to previous track"),
-      SimpleCommandTool(
-        "open_music", script: #"tell application "Music" to activate"#,
-        message: "Apple Music opened", requiresMusicRunning: false),
-      SetVolumeTool(),
-
-      // Information
-      GetCurrentTrackTool(),
-      GetLibraryStatsTool(),
-
-      // Search
-      SearchSongsTool(),
-      PlaySongTool(),
-    ]
-    return Dictionary(uniqueKeysWithValues: toolList.map { ($0.name, $0) })
-  }()
-
-  func invoke(toolId: String, payload: String) -> String {
-    guard let tool = tools[toolId] else {
-      return #"{"error": "Unknown tool: \#(toolId)"}"#
+    let runner = AppleScriptRunner()
+    
+    let tools: [String: Tool] = {
+        let toolList: [Tool] = [
+            // Playback controls
+            SimpleCommandTool("play", script: #"tell application "Music" to play"#, message: "Playback started"),
+            SimpleCommandTool("pause", script: #"tell application "Music" to pause"#, message: "Playback paused"),
+            SimpleCommandTool("next_track", script: #"tell application "Music" to next track"#, message: "Skipped to next track"),
+            SimpleCommandTool("previous_track", script: #"tell application "Music" to previous track"#, message: "Went to previous track"),
+            SimpleCommandTool("open_music", script: #"tell application "Music" to activate"#, message: "Apple Music opened", requiresMusicRunning: false),
+            SetVolumeTool(),
+            
+            // Information
+            GetCurrentTrackTool(),
+            GetLibraryStatsTool(),
+            
+            // Search
+            SearchSongsTool(),
+            PlaySongTool(),
+        ]
+        return Dictionary(uniqueKeysWithValues: toolList.map { ($0.name, $0) })
+    }()
+    
+    func invoke(toolId: String, payload: String) -> String {
+        guard let tool = tools[toolId] else {
+            return #"{"error": "Unknown tool: \#(toolId)"}"#
+        }
+        return tool.run(args: payload, runner: runner)
     }
-    return tool.run(args: payload, runner: runner)
-  }
 }
 
 // MARK: - C ABI
@@ -349,89 +332,86 @@ private class PluginContext {
 private typealias osr_plugin_ctx_t = UnsafeMutableRawPointer
 
 private struct osr_plugin_api {
-  var free_string: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
-  var `init`: (@convention(c) () -> osr_plugin_ctx_t?)?
-  var destroy: (@convention(c) (osr_plugin_ctx_t?) -> Void)?
-  var get_manifest: (@convention(c) (osr_plugin_ctx_t?) -> UnsafePointer<CChar>?)?
-  var invoke:
-    (
-      @convention(c) (
-        osr_plugin_ctx_t?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?
-      ) -> UnsafePointer<CChar>?
-    )?
+    var free_string: (@convention(c) (UnsafePointer<CChar>?) -> Void)?
+    var `init`: (@convention(c) () -> osr_plugin_ctx_t?)?
+    var destroy: (@convention(c) (osr_plugin_ctx_t?) -> Void)?
+    var get_manifest: (@convention(c) (osr_plugin_ctx_t?) -> UnsafePointer<CChar>?)?
+    var invoke: (@convention(c) (osr_plugin_ctx_t?, UnsafePointer<CChar>?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>?)?
 }
 
 private func makeCString(_ s: String) -> UnsafePointer<CChar>? {
-  guard let ptr = strdup(s) else { return nil }
-  return UnsafePointer(ptr)
+    guard let ptr = strdup(s) else { return nil }
+    return UnsafePointer(ptr)
 }
 
 // MARK: - Manifest
 
 private let manifest = #"""
-  {
-    "plugin_id": "osaurus.music",
-    "name": "Apple Music",
-    "version": "0.1.0",
-    "description": "Control Apple Music playback, search your library, and get track information",
-    "license": "MIT",
-    "authors": ["Osaurus Team"],
-    "capabilities": {
-      "tools": [
-        {"name": "open_music", "description": "Open Apple Music app", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "play", "description": "Resume or start music playback", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "pause", "description": "Pause music playback", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "next_track", "description": "Skip to the next track", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "previous_track", "description": "Go to the previous track", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "set_volume", "description": "Set volume level (0-100)", "parameters": {"type": "object", "properties": {"level": {"type": "integer", "description": "Volume level from 0 to 100"}}, "required": ["level"]}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "get_current_track", "description": "Get currently playing track info", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "get_library_stats", "description": "Get library statistics (track and playlist counts)", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "search_songs", "description": "Search for songs in your library", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "Max results (default: 10)"}}, "required": ["query"]}, "requirements": ["automation"], "permission_policy": "auto"},
-        {"name": "play_song", "description": "Search and play a specific song", "parameters": {"type": "object", "properties": {"song": {"type": "string", "description": "Song name to search and play"}}, "required": ["song"]}, "requirements": ["automation"], "permission_policy": "ask"}
-      ]
-    }
+{
+  "plugin_id": "osaurus.music",
+  "name": "Apple Music",
+  "version": "0.1.0",
+  "description": "Control Apple Music playback, search your library, and get track information",
+  "license": "MIT",
+  "authors": [],
+  "min_macos": "15.0",
+  "min_osaurus": "0.5.0",
+  "capabilities": {
+    "tools": [
+      {"id": "open_music", "description": "Open Apple Music app", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "play", "description": "Resume or start music playback", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "pause", "description": "Pause music playback", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "next_track", "description": "Skip to the next track", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "previous_track", "description": "Go to the previous track", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "set_volume", "description": "Set volume level (0-100)", "parameters": {"type": "object", "properties": {"level": {"type": "integer", "description": "Volume level from 0 to 100"}}, "required": ["level"]}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "get_current_track", "description": "Get currently playing track info", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "get_library_stats", "description": "Get library statistics (track and playlist counts)", "parameters": {"type": "object", "properties": {}}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "search_songs", "description": "Search for songs in your library", "parameters": {"type": "object", "properties": {"query": {"type": "string", "description": "Search query"}, "limit": {"type": "integer", "description": "Max results (default: 10)"}}, "required": ["query"]}, "requirements": ["automation"], "permission_policy": "auto"},
+      {"id": "play_song", "description": "Search and play a specific song", "parameters": {"type": "object", "properties": {"song": {"type": "string", "description": "Song name to search and play"}}, "required": ["song"]}, "requirements": ["automation"], "permission_policy": "ask"}
+    ]
   }
-  """#
+}
+"""#
 
 // MARK: - API Implementation
 
 nonisolated(unsafe) private var api: osr_plugin_api = {
-  var api = osr_plugin_api()
-
-  api.free_string = { ptr in
-    if let p = ptr { free(UnsafeMutableRawPointer(mutating: p)) }
-  }
-
-  api.`init` = {
-    Unmanaged.passRetained(PluginContext()).toOpaque()
-  }
-
-  api.destroy = { ctxPtr in
-    guard let ctxPtr else { return }
-    Unmanaged<PluginContext>.fromOpaque(ctxPtr).release()
-  }
-
-  api.get_manifest = { _ in makeCString(manifest) }
-
-  api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
-    guard let ctxPtr, let typePtr, let idPtr, let payloadPtr else { return nil }
-
-    let ctx = Unmanaged<PluginContext>.fromOpaque(ctxPtr).takeUnretainedValue()
-    let type = String(cString: typePtr)
-    let id = String(cString: idPtr)
-    let payload = String(cString: payloadPtr)
-
-    guard type == "tool" else {
-      return makeCString(#"{"error": "Unknown capability type: \#(type)"}"#)
+    var api = osr_plugin_api()
+    
+    api.free_string = { ptr in
+        if let p = ptr { free(UnsafeMutableRawPointer(mutating: p)) }
     }
-
-    return makeCString(ctx.invoke(toolId: id, payload: payload))
-  }
-
-  return api
+    
+    api.`init` = {
+        Unmanaged.passRetained(PluginContext()).toOpaque()
+    }
+    
+    api.destroy = { ctxPtr in
+        guard let ctxPtr else { return }
+        Unmanaged<PluginContext>.fromOpaque(ctxPtr).release()
+    }
+    
+    api.get_manifest = { _ in makeCString(manifest) }
+    
+    api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
+        guard let ctxPtr, let typePtr, let idPtr, let payloadPtr else { return nil }
+        
+        let ctx = Unmanaged<PluginContext>.fromOpaque(ctxPtr).takeUnretainedValue()
+        let type = String(cString: typePtr)
+        let id = String(cString: idPtr)
+        let payload = String(cString: payloadPtr)
+        
+        guard type == "tool" else {
+            return makeCString(#"{"error": "Unknown capability type: \#(type)"}"#)
+        }
+        
+        return makeCString(ctx.invoke(toolId: id, payload: payload))
+    }
+    
+    return api
 }()
 
 @_cdecl("osaurus_plugin_entry")
 public func osaurus_plugin_entry() -> UnsafeRawPointer? {
-  UnsafeRawPointer(&api)
+    UnsafeRawPointer(&api)
 }
